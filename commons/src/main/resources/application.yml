@@ -1,0 +1,171 @@
+server:
+  port: 8081
+  # Graceful shutdown — finish in-flight requests before stopping
+  # Without this: K8s kills the pod mid-request during rolling update
+  # User gets 502, JWT not issued, bad experience
+  shutdown: graceful
+
+spring:
+  application:
+    name: user-service     # This is what registers in Eureka
+      # And what shows in Kibana logs
+    # And what Feign clients use to find us
+
+  # ── Database ────────────────────────────────────────────────
+  datasource:
+    # createDatabaseIfNotExist=true: lets Flyway create schema on first boot
+    # useSSL=false: for local dev. Production: useSSL=true with certs
+    # allowPublicKeyRetrieval=true: required for MySQL 8 with no SSL
+    url: jdbc:mysql://${DB_HOST:localhost}:3306/loanflow_users?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+    hikari:
+      # Connection pool sizing — the most misunderstood config in Spring
+      # Formula: connections = (core_count * 2) + effective_spindle_count
+      # For a 2-core pod: (2*2) + 1 = 5. We use 10 for headroom.
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+      # How long to wait for a connection from the pool
+      # If all 10 connections busy and new request comes:
+      # Wait 30s before throwing "Unable to acquire connection"
+      connection-timeout: 30000
+
+      # Kill connections idle longer than 10 minutes
+      # Prevents "stale connection" errors after MySQL's wait_timeout
+      idle-timeout: 600000
+
+      # Connection lifetime cap — even active connections recycled
+      # Prevents memory leaks from very long-lived connections
+      max-lifetime: 1800000
+
+      pool-name: UserServiceHikariPool
+
+  # ── JPA / Hibernate ─────────────────────────────────────────
+  jpa:
+    hibernate:
+      # VALIDATE: Hibernate checks that entity fields match DB schema
+      # but does NOT create or modify tables.
+      # Flyway owns schema — Hibernate just validates.
+      #
+      # Never use 'create' or 'update' in production:
+      # 'update' can silently drop columns in edge cases
+      # 'create' wipes your entire database on restart
+      ddl-auto: validate
+
+    show-sql: false          # true only in local debugging — never production
+    # logs every SQL query — destroys log readability
+
+    open-in-view: false      # OSIV anti-pattern disabled
+      # OSIV keeps DB session open for entire HTTP request
+      # Causes connection pool exhaustion under load
+    # Always false in microservices
+
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: false
+        # Batch inserts — when saving multiple entities in a loop
+        # Without batching: 100 INSERTs = 100 round trips to DB
+        # With batching: 100 INSERTs = 1 round trip (batch of 100)
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+
+  # ── Flyway ───────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    # Location of migration SQL scripts
+    locations: classpath:db/migration
+    # baseline-on-migrate: if DB has existing tables (not fresh),
+    # treat current state as V0 baseline and apply only newer migrations
+    baseline-on-migrate: true
+    # Validate that applied migrations match scripts on classpath
+    # Prevents "someone edited a migration after it ran" disaster
+    validate-on-migrate: true
+
+  # ── Kafka ────────────────────────────────────────────────────
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: user-service-group
+      auto-offset-reset: earliest
+    producer:
+      # Add type information to Kafka message headers
+      # Consumer uses this to know which class to deserialize into
+      properties:
+        spring.json.add.type.headers: true
+
+  # ── Redis ────────────────────────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+      # Connection pool for Redis (Lettuce is default in Spring Boot 3)
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 4
+
+  # ── Lifecycle ────────────────────────────────────────────────
+  lifecycle:
+    # During graceful shutdown, wait up to 30s for requests to finish
+    timeout-per-shutdown-phase: 30s
+
+# ── Eureka ──────────────────────────────────────────────────────
+eureka:
+  client:
+    service-url:
+      defaultZone: http://eureka-admin:eureka-secret-2024@${EUREKA_HOST:localhost}:8761/eureka/
+    # Fetch registry every 10s (default 30s — too slow for fast failover)
+    registry-fetch-interval-seconds: 10
+  instance:
+    prefer-ip-address: true
+    # Heartbeat every 10s (default 30s)
+    lease-renewal-interval-in-seconds: 10
+    # If no heartbeat for 30s, remove from registry (default 90s)
+    lease-expiration-duration-in-seconds: 30
+    instance-id: ${spring.application.name}:${server.port}
+
+# ── JWT ──────────────────────────────────────────────────────────
+jwt:
+  # In production: inject from HashiCorp Vault via environment variable
+  # Never commit real secrets to Git
+  secret: ${JWT_SECRET:loanflow-super-secret-key-minimum-256-bits-long-change-in-prod}
+  access-token-expiry-ms: 900000       # 15 minutes
+  refresh-token-expiry-ms: 604800000   # 7 days
+
+# ── Actuator (for Prometheus + K8s health probes) ────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: always
+      # Kubernetes uses /actuator/health/liveness and /actuator/health/readiness
+      # liveness:  is the JVM running? If no → K8s restarts pod
+      # readiness: is DB connected? If no → K8s stops sending traffic
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      # Every Prometheus metric tagged with service name
+      # Lets you filter in Grafana: service="user-service"
+      service: ${spring.application.name}
+
+# ── Logging ──────────────────────────────────────────────────────
+logging:
+  level:
+    com.loanflow.user: DEBUG
+    org.springframework.security: INFO   # DEBUG in security shows JWT internals
+    org.hibernate.SQL: INFO
+  pattern:
+    # Structured log pattern — Logstash parses this format
+    # correlationId appears in every log line automatically
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{correlationId}] %-5level %logger{36} - %msg%n"
