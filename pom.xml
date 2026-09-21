@@ -25,6 +25,8 @@
         <module>loan-service</module>
         <module>credit-service</module>
         <module>document-service</module>
+        <module>emi-service</module>
+        <module>payment-service</module>
     </modules>
     <properties>
         <java.version>21</java.version>
