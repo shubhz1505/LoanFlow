@@ -16,22 +16,26 @@
         </processorPath>
         <module name="emi-service" />
         <module name="payment-service" />
+        <module name="audit-service" />
         <module name="credit-service" />
         <module name="user-service (1)" />
         <module name="loan-service" />
         <module name="user-service" />
         <module name="commons" />
+        <module name="notification-service" />
         <module name="document-service" />
       </profile>
     </annotationProcessing>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="audit-service" options="-parameters" />
       <module name="commons" options="-parameters" />
       <module name="credit-service" options="-parameters" />
       <module name="document-service" options="-parameters" />
       <module name="emi-service" options="-parameters" />
       <module name="loan-service" options="-parameters" />
+      <module name="notification-service" options="-parameters" />
       <module name="payment-service" options="-parameters" />
       <module name="user-service" options="-parameters" />
       <module name="user-service (1)" options="-parameters" />
