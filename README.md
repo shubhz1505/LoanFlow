@@ -276,7 +276,7 @@ LoanFlow/
 ### Step 1 — Clone the Repository
 
 ```bash
-git clone https://github.com/AdityaZaware1/LoanFlow.git
+git clone https://github.com/shubhz1505/LoanFlow.git
 cd LoanFlow
 ```
 
